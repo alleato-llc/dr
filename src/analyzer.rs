@@ -48,6 +48,222 @@ fn db_fs(linear: f64) -> f64 {
     }
 }
 
+/// Streaming DR state that accumulates statistics block-by-block
+/// without buffering the entire track in memory.
+struct StreamingDrState {
+    channels: usize,
+    sample_rate: usize,
+    block_frames: usize,
+    // Per-channel accumulators for the current in-progress block
+    current_block_frames: usize,
+    ch_sum_sq: Vec<f64>,
+    ch_peak: Vec<f64>,
+    // Completed block stats
+    block_rms: Vec<Vec<f64>>,
+    block_peaks: Vec<Vec<f64>>,
+    // Global absolute peak (across all samples, all channels)
+    global_peak: f64,
+    // Residual buffer for partial frames from packet boundaries
+    residual: Vec<f32>,
+}
+
+impl StreamingDrState {
+    fn new(channels: usize, sample_rate: usize) -> Self {
+        Self {
+            channels,
+            sample_rate,
+            block_frames: 3 * sample_rate,
+            current_block_frames: 0,
+            ch_sum_sq: vec![0.0; channels],
+            ch_peak: vec![0.0; channels],
+            block_rms: (0..channels).map(|_| Vec::new()).collect(),
+            block_peaks: (0..channels).map(|_| Vec::new()).collect(),
+            global_peak: 0.0,
+            residual: Vec::new(),
+        }
+    }
+
+    /// Feed interleaved samples into the streaming state.
+    /// Processes complete 3-second blocks as they fill up.
+    fn push_samples(&mut self, interleaved: &[f32]) {
+        let channels = self.channels;
+        if channels == 0 {
+            return;
+        }
+        let block_size = self.block_frames * channels;
+
+        // If we have residual samples from the previous packet, prepend them
+        let samples: &[f32] = if self.residual.is_empty() {
+            interleaved
+        } else {
+            self.residual.extend_from_slice(interleaved);
+            // We'll process from residual; it will be replaced at the end
+            &[] // placeholder — handled below
+        };
+
+        // Unify: work from a single slice
+        let work = if samples.is_empty() {
+            // residual was extended above
+            // Take ownership of the data for processing
+            let data = std::mem::take(&mut self.residual);
+            // Process and store leftover back
+            self.process_slice(&data, block_size);
+            return;
+        } else {
+            samples
+        };
+
+        self.process_slice(work, block_size);
+    }
+
+    fn process_slice(&mut self, data: &[f32], block_size: usize) {
+        let channels = self.channels;
+        let mut offset = 0;
+
+        while offset + block_size <= data.len() + self.current_block_frames * channels {
+            // How many more samples do we need to complete the current block?
+            let remaining_frames = self.block_frames - self.current_block_frames;
+            let remaining_samples = remaining_frames * channels;
+
+            if offset + remaining_samples > data.len() {
+                break;
+            }
+
+            let chunk = &data[offset..offset + remaining_samples];
+
+            // Accumulate into current block
+            for ch in 0..channels {
+                let mut sum_sq = self.ch_sum_sq[ch];
+                let mut peak = self.ch_peak[ch];
+                for &s in chunk.iter().skip(ch).step_by(channels) {
+                    let v = s as f64;
+                    sum_sq += v * v;
+                    let abs_v = v.abs();
+                    if abs_v > peak {
+                        peak = abs_v;
+                    }
+                    if abs_v > self.global_peak {
+                        self.global_peak = abs_v;
+                    }
+                }
+                self.ch_sum_sq[ch] = sum_sq;
+                self.ch_peak[ch] = peak;
+            }
+
+            self.current_block_frames = self.block_frames;
+
+            // Block complete — store RMS and peak, reset accumulators
+            let block_frames = self.block_frames as f64;
+            for ch in 0..channels {
+                let rms = (2.0 * self.ch_sum_sq[ch] / block_frames).sqrt();
+                self.block_rms[ch].push(rms);
+                self.block_peaks[ch].push(self.ch_peak[ch]);
+            }
+            self.ch_sum_sq.iter_mut().for_each(|v| *v = 0.0);
+            self.ch_peak.iter_mut().for_each(|v| *v = 0.0);
+            self.current_block_frames = 0;
+
+            offset += remaining_samples;
+        }
+
+        // Process leftover partial block samples (update accumulators but don't finalize)
+        let leftover = &data[offset..];
+        if !leftover.is_empty() {
+            let leftover_frames = leftover.len() / channels;
+            for ch in 0..channels {
+                let mut sum_sq = self.ch_sum_sq[ch];
+                let mut peak = self.ch_peak[ch];
+                for &s in leftover.iter().skip(ch).step_by(channels) {
+                    let v = s as f64;
+                    sum_sq += v * v;
+                    let abs_v = v.abs();
+                    if abs_v > peak {
+                        peak = abs_v;
+                    }
+                    if abs_v > self.global_peak {
+                        self.global_peak = abs_v;
+                    }
+                }
+                self.ch_sum_sq[ch] = sum_sq;
+                self.ch_peak[ch] = peak;
+            }
+            self.current_block_frames += leftover_frames;
+        }
+
+        // Store any sub-frame residual (shouldn't happen with well-formed data,
+        // but be safe)
+        let consumed = offset + (leftover.len() / channels) * channels;
+        if consumed < data.len() {
+            self.residual = data[consumed..].to_vec();
+        } else {
+            self.residual.clear();
+        }
+    }
+
+    /// Finalize and compute DR stats. Discards any partial final block
+    /// per the TT DR standard.
+    fn finalize(self, total_frames: usize) -> (u32, f64, f64, f64) {
+        let channels = self.channels;
+        let duration_secs = total_frames as f64 / self.sample_rate as f64;
+
+        let num_blocks = if channels > 0 {
+            self.block_rms[0].len()
+        } else {
+            0
+        };
+
+        if num_blocks == 0 || channels == 0 {
+            return (0, db_fs(self.global_peak), -f64::INFINITY, duration_secs);
+        }
+
+        let mut channel_drs: Vec<f64> = Vec::with_capacity(channels);
+        let mut report_rms = 0.0f64;
+
+        for ch in 0..channels {
+            let mut ch_rms: Vec<f64> = self.block_rms[ch].clone();
+            let mut ch_peaks: Vec<f64> = self.block_peaks[ch].clone();
+
+            // Sort RMS descending
+            ch_rms.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+
+            // Top 20% RMS — combine via quadratic mean (RMS of RMS values)
+            let top_count = ((num_blocks as f64 * 0.2).ceil() as usize).max(1);
+            let sum_sq: f64 = ch_rms.iter().take(top_count).map(|v| v * v).sum();
+            let combined_rms = (sum_sq / top_count as f64).sqrt();
+
+            // Sort peaks descending, use 2nd-highest (fall back to highest if < 2 blocks)
+            ch_peaks.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+            let peak = if ch_peaks.len() >= 2 {
+                ch_peaks[1]
+            } else {
+                ch_peaks[0]
+            };
+
+            // Per-channel DR
+            if peak > 0.0 && combined_rms > 0.0 {
+                channel_drs.push(20.0 * (peak / combined_rms).log10());
+            } else {
+                channel_drs.push(0.0);
+            }
+
+            if combined_rms > report_rms {
+                report_rms = combined_rms;
+            }
+        }
+
+        // Final DR = mean of per-channel DR values, rounded
+        let dr = if channel_drs.is_empty() {
+            0
+        } else {
+            let mean_dr: f64 = channel_drs.iter().sum::<f64>() / channel_drs.len() as f64;
+            mean_dr.round() as u32
+        };
+
+        (dr, db_fs(self.global_peak), db_fs(report_rms), duration_secs)
+    }
+}
+
+#[cfg(test)]
 /// Per-channel data for a single 3-second block.
 struct BlockStats {
     /// DR-RMS per channel: sqrt(2 * sum(x²) / N)
@@ -56,6 +272,7 @@ struct BlockStats {
     peak: Vec<f64>,
 }
 
+#[cfg(test)]
 /// Compute per-channel DR-RMS and peak for a block of interleaved samples.
 /// DR-RMS uses the sqrt(2) factor per the Pleasurize Music / TT DR standard,
 /// which calibrates a full-scale sine wave to 0 dB RMS.
@@ -83,6 +300,7 @@ fn compute_block_stats(samples: &[f32], channels: usize) -> BlockStats {
     BlockStats { rms, peak }
 }
 
+#[cfg(test)]
 /// Compute DR, peak_dB, and rms_dB from decoded interleaved samples.
 ///
 /// Per the TT DR standard, everything is computed independently per channel:
@@ -248,8 +466,11 @@ pub fn analyze_file_with_progress(
         .make(&codec_params, &DecoderOptions::default())
         .context("Failed to create decoder")?;
 
-    let mut all_samples: Vec<f32> = Vec::new();
+    let mut state = StreamingDrState::new(channels, sample_rate);
     let mut bytes_decoded: u64 = 0;
+    let mut sample_buf: Option<SampleBuffer<f32>> = None;
+    let mut sample_buf_capacity: u64 = 0;
+    let mut total_frames: usize = 0;
 
     loop {
         let packet = match format.next_packet() {
@@ -281,18 +502,29 @@ pub fn analyze_file_with_progress(
         };
 
         let spec = *decoded.spec();
-        let num_frames = decoded.frames();
-        let mut sample_buf = SampleBuffer::<f32>::new(num_frames as u64, spec);
-        sample_buf.copy_interleaved_ref(decoded);
-        all_samples.extend_from_slice(sample_buf.samples());
+        let num_frames = decoded.frames() as u64;
+        total_frames += num_frames as usize;
+
+        // Reuse SampleBuffer across packets; only reallocate if capacity is insufficient
+        let buf = if let Some(ref mut buf) = sample_buf {
+            if sample_buf_capacity < num_frames {
+                *buf = SampleBuffer::new(num_frames, spec);
+                sample_buf_capacity = num_frames;
+            }
+            buf
+        } else {
+            sample_buf = Some(SampleBuffer::new(num_frames, spec));
+            sample_buf_capacity = num_frames;
+            sample_buf.as_mut().unwrap()
+        };
+
+        buf.copy_interleaved_ref(decoded);
+        state.push_samples(buf.samples());
     }
 
     on_progress(1.0);
 
-    let total_frames = all_samples.len() / channels.max(1);
-    let duration_secs = total_frames as f64 / sample_rate as f64;
-
-    let (dr_value, peak_db, rms_db) = compute_dr(&all_samples, channels, sample_rate);
+    let (dr_value, peak_db, rms_db, duration_secs) = state.finalize(total_frames);
 
     let filename = path
         .file_name()
@@ -307,6 +539,7 @@ pub fn analyze_file_with_progress(
         duration_secs,
         title,
         filename,
+        file_bytes: file_size,
     })
 }
 
@@ -342,7 +575,10 @@ pub fn analyze_stdin(format_hint: &str) -> Result<TrackResult> {
         .make(&codec_params, &DecoderOptions::default())
         .context("Failed to create decoder")?;
 
-    let mut all_samples: Vec<f32> = Vec::new();
+    let mut state = StreamingDrState::new(channels, sample_rate);
+    let mut sample_buf: Option<SampleBuffer<f32>> = None;
+    let mut sample_buf_capacity: u64 = 0;
+    let mut total_frames: usize = 0;
 
     loop {
         let packet = match format.next_packet() {
@@ -367,16 +603,26 @@ pub fn analyze_stdin(format_hint: &str) -> Result<TrackResult> {
         };
 
         let spec = *decoded.spec();
-        let num_frames = decoded.frames();
-        let mut sample_buf = SampleBuffer::<f32>::new(num_frames as u64, spec);
-        sample_buf.copy_interleaved_ref(decoded);
-        all_samples.extend_from_slice(sample_buf.samples());
+        let num_frames = decoded.frames() as u64;
+        total_frames += num_frames as usize;
+
+        let buf = if let Some(ref mut buf) = sample_buf {
+            if sample_buf_capacity < num_frames {
+                *buf = SampleBuffer::new(num_frames, spec);
+                sample_buf_capacity = num_frames;
+            }
+            buf
+        } else {
+            sample_buf = Some(SampleBuffer::new(num_frames, spec));
+            sample_buf_capacity = num_frames;
+            sample_buf.as_mut().unwrap()
+        };
+
+        buf.copy_interleaved_ref(decoded);
+        state.push_samples(buf.samples());
     }
 
-    let total_frames = all_samples.len() / channels.max(1);
-    let duration_secs = total_frames as f64 / sample_rate as f64;
-
-    let (dr_value, peak_db, rms_db) = compute_dr(&all_samples, channels, sample_rate);
+    let (dr_value, peak_db, rms_db, duration_secs) = state.finalize(total_frames);
 
     Ok(TrackResult {
         dr: dr_value,
@@ -385,6 +631,7 @@ pub fn analyze_stdin(format_hint: &str) -> Result<TrackResult> {
         duration_secs,
         title,
         filename: "STDIN".to_string(),
+        file_bytes: 0,
     })
 }
 

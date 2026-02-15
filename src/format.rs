@@ -116,6 +116,7 @@ mod tests {
                 duration_secs: 263.0,
                 title: "Test Track".to_string(),
                 filename: "test.flac".to_string(),
+                file_bytes: 0,
             }],
             overall_dr: 14,
             album: Some("Test Album".to_string()),
@@ -139,6 +140,7 @@ mod tests {
             duration_secs: 225.0,
             title: "My Track".to_string(),
             filename: "track.flac".to_string(),
+            file_bytes: 0,
         };
         let json = format_json_single(&track);
         let parsed: TrackResult = serde_json::from_str(&json).unwrap();
@@ -157,6 +159,7 @@ mod tests {
                     duration_secs: 263.0,
                     title: "Track One".to_string(),
                     filename: "01.flac".to_string(),
+                    file_bytes: 0,
                 },
                 TrackResult {
                     dr: 12,
@@ -165,6 +168,7 @@ mod tests {
                     duration_secs: 225.0,
                     title: "Track Two".to_string(),
                     filename: "02.flac".to_string(),
+                    file_bytes: 0,
                 },
             ],
             overall_dr: 13,

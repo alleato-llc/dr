@@ -8,6 +8,8 @@ pub struct TrackResult {
     pub duration_secs: f64,
     pub title: String,
     pub filename: String,
+    #[serde(default)]
+    pub file_bytes: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

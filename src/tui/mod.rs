@@ -4,7 +4,7 @@ pub mod ui;
 use std::io;
 use std::path::Path;
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
@@ -16,12 +16,13 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 
 use crate::analyzer::{analyze_directory_async, scan_audio_files};
+use crate::cache;
 use crate::format;
 use crate::models::AnalysisEvent;
 
-use app::{App, ExportFormat, TrackStatus, View};
+use app::{App, BenchmarkStats, ExportFormat, TrackStatus, TrackTiming, View};
 
-pub fn run(path: &Path, jobs: usize) -> Result<()> {
+pub fn run(path: &Path, jobs: usize, regenerate: bool) -> Result<()> {
     let files = scan_audio_files(path);
     if files.is_empty() {
         anyhow::bail!("No audio files found in {}", path.display());
@@ -32,14 +33,21 @@ pub fn run(path: &Path, jobs: usize) -> Result<()> {
         .filter_map(|p| p.file_name().and_then(|f| f.to_str()).map(String::from))
         .collect();
 
-    let mut app = App::new(filenames, path.to_path_buf());
+    let mut app = App::new(filenames, path.to_path_buf(), jobs);
 
-    // Spawn analysis thread
-    let (tx, rx) = mpsc::channel::<AnalysisEvent>();
-    let analysis_path = path.to_path_buf();
-    std::thread::spawn(move || {
-        let _ = analyze_directory_async(&analysis_path, tx, jobs);
-    });
+    // Check for cached report
+    let rx = if !regenerate {
+        if let Some(cached) = cache::load_cached_report(path) {
+            app.load_from_cache(cached);
+            // Create a dummy channel that will never receive
+            let (_tx, rx) = mpsc::channel::<AnalysisEvent>();
+            rx
+        } else {
+            spawn_analysis(&mut app, path, jobs)
+        }
+    } else {
+        spawn_analysis(&mut app, path, jobs)
+    };
 
     // Setup terminal
     enable_raw_mode()?;
@@ -56,14 +64,29 @@ pub fn run(path: &Path, jobs: usize) -> Result<()> {
     result
 }
 
+fn spawn_analysis(
+    app: &mut App,
+    path: &Path,
+    jobs: usize,
+) -> mpsc::Receiver<AnalysisEvent> {
+    let (tx, rx) = mpsc::channel::<AnalysisEvent>();
+    let analysis_path = path.to_path_buf();
+    app.analysis_start = Some(Instant::now());
+    std::thread::spawn(move || {
+        let _ = analyze_directory_async(&analysis_path, tx, jobs);
+    });
+    rx
+}
+
 fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
     rx: mpsc::Receiver<AnalysisEvent>,
 ) -> Result<()> {
+    let mut rx = rx;
+
     loop {
         terminal.draw(|frame| ui::render(frame, app))?;
-        // Note: ui::render updates app.visible_rows each frame
 
         // Drain analysis events
         while let Ok(event) = rx.try_recv() {
@@ -72,6 +95,9 @@ fn run_loop(
                     if let Some(track) = app.tracks.get_mut(index) {
                         track.1 = TrackStatus::Analyzing(0.0);
                     }
+                    if index < app.track_start_times.len() {
+                        app.track_start_times[index] = Some(Instant::now());
+                    }
                 }
                 AnalysisEvent::TrackProgress { index, percent } => {
                     if let Some(track) = app.tracks.get_mut(index) {
@@ -79,14 +105,46 @@ fn run_loop(
                     }
                 }
                 AnalysisEvent::TrackCompleted { index, result } => {
-                    if let Some(track) = app.tracks.get_mut(index) {
-                        if app.album_title.is_none() {
-                            // Try to use the title hint
+                    // Record timing
+                    if index < app.track_start_times.len() {
+                        if let Some(start) = app.track_start_times[index] {
+                            let elapsed = start.elapsed();
+                            if index < app.track_elapsed.len() {
+                                app.track_elapsed[index] = Some(elapsed);
+                            }
                         }
+                    }
+                    if let Some(track) = app.tracks.get_mut(index) {
                         track.1 = TrackStatus::Complete(result);
                     }
                 }
                 AnalysisEvent::AlbumCompleted { result } => {
+                    // Build benchmark stats
+                    if let Some(analysis_start) = app.analysis_start {
+                        let total_elapsed = analysis_start.elapsed();
+                        let track_timings: Vec<TrackTiming> = result
+                            .tracks
+                            .iter()
+                            .enumerate()
+                            .map(|(i, t)| TrackTiming {
+                                elapsed: app
+                                    .track_elapsed
+                                    .get(i)
+                                    .copied()
+                                    .flatten()
+                                    .unwrap_or(Duration::ZERO),
+                                file_bytes: t.file_bytes,
+                            })
+                            .collect();
+                        app.benchmark = Some(BenchmarkStats {
+                            total_elapsed,
+                            track_timings,
+                        });
+                    }
+
+                    // Auto-save cache
+                    let _ = cache::save_report(&app.path, &result);
+
                     app.album_title = result.album.clone();
                     app.album_result = Some(result);
                 }
@@ -116,6 +174,16 @@ fn run_loop(
                                 app.export_message = None;
                             }
                         }
+                        KeyCode::Char('i') => {
+                            if app.album_result.is_some() {
+                                app.view = View::Info;
+                            }
+                        }
+                        KeyCode::Char('r') => {
+                            if app.album_result.is_some() {
+                                app.view = View::RegenerateConfirm;
+                            }
+                        }
                         KeyCode::Char('a') => {
                             app.view = View::About;
                         }
@@ -127,8 +195,30 @@ fn run_loop(
                         }
                         _ => {}
                     },
-                    View::About => match key.code {
+                    View::About | View::Info => match key.code {
                         KeyCode::Esc | KeyCode::Char('q') => {
+                            app.view = View::Main;
+                        }
+                        _ => {}
+                    },
+                    View::RegenerateConfirm => match key.code {
+                        KeyCode::Char('y') | KeyCode::Enter => {
+                            // Rescan files and regenerate
+                            let files = scan_audio_files(&app.path);
+                            let filenames: Vec<String> = files
+                                .iter()
+                                .filter_map(|p| {
+                                    p.file_name()
+                                        .and_then(|f| f.to_str())
+                                        .map(String::from)
+                                })
+                                .collect();
+                            let jobs = app.jobs;
+                            let path = app.path.clone();
+                            app.reset_for_regeneration(filenames);
+                            rx = spawn_analysis(app, &path, jobs);
+                        }
+                        KeyCode::Char('n') | KeyCode::Esc => {
                             app.view = View::Main;
                         }
                         _ => {}

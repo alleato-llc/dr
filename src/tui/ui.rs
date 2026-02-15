@@ -33,6 +33,8 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     match app.view {
         View::About => render_about_overlay(frame),
         View::Export => render_export_overlay(frame, app),
+        View::Info => render_info_overlay(frame, app),
+        View::RegenerateConfirm => render_regenerate_overlay(frame),
         View::Main => {}
     }
 }
@@ -44,15 +46,24 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
         .unwrap_or("Unknown Album");
     let path_text = app.path.display().to_string();
 
-    let text = vec![
-        Line::from(vec![
-            Span::styled("Album: ", Style::default().fg(DIM)),
-            Span::styled(album_text, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-            Span::raw("  "),
-            Span::styled("Path: ", Style::default().fg(DIM)),
-            Span::styled(path_text, Style::default().fg(DIM)),
-        ]),
+    let mut spans = vec![
+        Span::styled("Album: ", Style::default().fg(DIM)),
+        Span::styled(album_text, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
     ];
+
+    if app.loaded_from_cache {
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(
+            "(cached)",
+            Style::default().fg(Color::Yellow),
+        ));
+    }
+
+    spans.push(Span::raw("  "));
+    spans.push(Span::styled("Path: ", Style::default().fg(DIM)));
+    spans.push(Span::styled(path_text, Style::default().fg(DIM)));
+
+    let text = vec![Line::from(spans)];
 
     let block = Block::default()
         .title(Span::styled(
@@ -231,8 +242,15 @@ fn render_summary(frame: &mut Frame, app: &App, area: Rect) {
 
 fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     let keys = match app.view {
-        View::Main => "[e]xport  [a]bout  [q]uit",
-        View::About | View::Export => "[Esc] close",
+        View::Main => {
+            if app.album_result.is_some() {
+                "[e]xport  [i]nfo  [r]egenerate  [a]bout  [q]uit"
+            } else {
+                "[a]bout  [q]uit"
+            }
+        }
+        View::RegenerateConfirm => "[y]es  [n]o",
+        View::About | View::Export | View::Info => "[Esc] close",
     };
     let footer = Paragraph::new(keys)
         .style(Style::default().fg(DIM))
@@ -323,6 +341,123 @@ fn render_export_overlay(frame: &mut Frame, app: &App) {
 
     let block = Block::default()
         .title(" Export ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(ACCENT));
+
+    let paragraph = Paragraph::new(text)
+        .alignment(Alignment::Center)
+        .block(block);
+    frame.render_widget(paragraph, area);
+}
+
+fn render_info_overlay(frame: &mut Frame, app: &App) {
+    let area = centered_rect(50, 12, frame.area());
+    frame.render_widget(Clear, area);
+
+    let mut text = vec![
+        Line::from(Span::styled(
+            "Analysis Info",
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+    ];
+
+    if app.loaded_from_cache {
+        text.push(Line::from(Span::styled(
+            "Loaded from cached report",
+            Style::default().fg(Color::Yellow),
+        )));
+        text.push(Line::from(""));
+        text.push(Line::from(vec![
+            Span::styled("Tracks: ", Style::default().fg(DIM)),
+            Span::styled(
+                format!("{}", app.tracks.len()),
+                Style::default().fg(Color::White),
+            ),
+        ]));
+        text.push(Line::from(""));
+        text.push(Line::from(Span::styled(
+            "Press [r] to re-analyze",
+            Style::default().fg(DIM),
+        )));
+    } else if let Some(ref bench) = app.benchmark {
+        text.push(Line::from(vec![
+            Span::styled("Tracks: ", Style::default().fg(DIM)),
+            Span::styled(
+                format!("{}", bench.track_timings.len()),
+                Style::default().fg(Color::White),
+            ),
+        ]));
+        text.push(Line::from(vec![
+            Span::styled("Total time: ", Style::default().fg(DIM)),
+            Span::styled(
+                format!("{:.2}s", bench.total_elapsed.as_secs_f64()),
+                Style::default().fg(Color::White),
+            ),
+        ]));
+        text.push(Line::from(vec![
+            Span::styled("Avg/track: ", Style::default().fg(DIM)),
+            Span::styled(
+                format!("{:.2}s", bench.avg_per_track().as_secs_f64()),
+                Style::default().fg(Color::White),
+            ),
+        ]));
+        text.push(Line::from(vec![
+            Span::styled("Total size: ", Style::default().fg(DIM)),
+            Span::styled(
+                format!("{:.1} MB", bench.total_mb()),
+                Style::default().fg(Color::White),
+            ),
+        ]));
+        text.push(Line::from(vec![
+            Span::styled("Throughput: ", Style::default().fg(DIM)),
+            Span::styled(
+                format!("{:.1} MB/s", bench.mb_per_sec()),
+                Style::default().fg(Color::White),
+            ),
+        ]));
+    } else {
+        text.push(Line::from("Analysis in progress..."));
+    }
+
+    text.push(Line::from(""));
+    text.push(Line::from(Span::styled(
+        "[Esc] close",
+        Style::default().fg(DIM),
+    )));
+
+    let block = Block::default()
+        .title(" Info ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(ACCENT));
+
+    let paragraph = Paragraph::new(text)
+        .alignment(Alignment::Center)
+        .block(block);
+    frame.render_widget(paragraph, area);
+}
+
+fn render_regenerate_overlay(frame: &mut Frame) {
+    let area = centered_rect(50, 8, frame.area());
+    frame.render_widget(Clear, area);
+
+    let text = vec![
+        Line::from(Span::styled(
+            "Re-analyze",
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from("Re-analyze all tracks?"),
+        Line::from("This will overwrite the cached report."),
+        Line::from(""),
+        Line::from(Span::styled(
+            "[y]es  [n]o",
+            Style::default().fg(DIM),
+        )),
+    ];
+
+    let block = Block::default()
+        .title(" Confirm ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(ACCENT));
 

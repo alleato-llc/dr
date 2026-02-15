@@ -1,7 +1,9 @@
 use std::io::Write;
 use std::path::PathBuf;
 
+use assert_cmd::cargo::cargo_bin_cmd;
 use dr::analyzer;
+use dr::cache;
 use dr::format;
 use dr::models::{AlbumResult, TrackResult};
 
@@ -114,6 +116,7 @@ fn test_table_formatter_columns() {
                 duration_secs: 263.0,
                 title: "First Track".to_string(),
                 filename: "01.flac".to_string(),
+                file_bytes: 0,
             },
             TrackResult {
                 dr: 12,
@@ -122,6 +125,7 @@ fn test_table_formatter_columns() {
                 duration_secs: 225.0,
                 title: "Second Track".to_string(),
                 filename: "02.flac".to_string(),
+                file_bytes: 0,
             },
         ],
         overall_dr: 13,
@@ -159,6 +163,7 @@ fn test_json_roundtrip() {
         duration_secs: 263.0,
         title: "Test Track".to_string(),
         filename: "test.flac".to_string(),
+        file_bytes: 0,
     };
 
     let json = format::format_json_single(&track);
@@ -181,6 +186,7 @@ fn test_album_json_roundtrip() {
             duration_secs: 180.0,
             title: "A Track".to_string(),
             filename: "a.flac".to_string(),
+            file_bytes: 0,
         }],
         overall_dr: 10,
         album: Some("My Album".to_string()),
@@ -208,4 +214,256 @@ fn test_scan_audio_files() {
     assert_eq!(files.len(), 2);
     assert!(files[0].extension().unwrap() == "flac");
     assert!(files[1].extension().unwrap() == "mp3");
+}
+
+// --- Cache helper tests ---
+
+#[test]
+fn test_reports_exist_no_files() {
+    let dir = tempfile::tempdir().unwrap();
+    // Neither file exists
+    assert!(!cache::reports_exist(dir.path(), true, false));
+    assert!(!cache::reports_exist(dir.path(), false, true));
+    assert!(!cache::reports_exist(dir.path(), true, true));
+    // Neither requested — vacuously true
+    assert!(cache::reports_exist(dir.path(), false, false));
+}
+
+#[test]
+fn test_reports_exist_json_only() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("dr_report.json"), "{}").unwrap();
+
+    assert!(cache::reports_exist(dir.path(), true, false));
+    assert!(!cache::reports_exist(dir.path(), true, true));
+    assert!(!cache::reports_exist(dir.path(), false, true));
+}
+
+#[test]
+fn test_reports_exist_txt_only() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("dr_report.txt"), "report").unwrap();
+
+    assert!(cache::reports_exist(dir.path(), false, true));
+    assert!(!cache::reports_exist(dir.path(), true, true));
+    assert!(!cache::reports_exist(dir.path(), true, false));
+}
+
+#[test]
+fn test_reports_exist_both() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("dr_report.json"), "{}").unwrap();
+    std::fs::write(dir.path().join("dr_report.txt"), "report").unwrap();
+
+    assert!(cache::reports_exist(dir.path(), true, true));
+    assert!(cache::reports_exist(dir.path(), true, false));
+    assert!(cache::reports_exist(dir.path(), false, true));
+}
+
+#[test]
+fn test_save_text_report() {
+    let dir = tempfile::tempdir().unwrap();
+    let content = "DR14  -0.10 dB  -16.78 dB  4:23  Test Track";
+    cache::save_text_report(dir.path(), content).unwrap();
+
+    let path = dir.path().join("dr_report.txt");
+    assert!(path.exists());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), content);
+}
+
+// --- CLI validation tests ---
+
+#[test]
+fn test_bulk_and_tui_conflict() {
+    cargo_bin_cmd!("dr")
+        .args([".", "--bulk", "--tui"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("--bulk and --tui cannot be used together"));
+}
+
+#[test]
+fn test_bulk_requires_output_format() {
+    cargo_bin_cmd!("dr")
+        .args([".", "--bulk"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains(
+            "--bulk requires at least one output format",
+        ));
+}
+
+// --- Bulk mode integration tests ---
+
+/// Helper: create a temp directory with two "album" subdirectories, each containing a sine WAV.
+fn setup_bulk_dir() -> tempfile::TempDir {
+    let base = tempfile::tempdir().unwrap();
+
+    let album_a = base.path().join("Album A");
+    let album_b = base.path().join("Album B");
+    std::fs::create_dir(&album_a).unwrap();
+    std::fs::create_dir(&album_b).unwrap();
+
+    generate_sine_wav(&album_a, "01-track.wav", 440.0, 0.99, 12.0, 44100);
+    generate_sine_wav(&album_b, "01-track.wav", 880.0, 0.99, 12.0, 44100);
+
+    base
+}
+
+#[test]
+fn test_bulk_json_only() {
+    let base = setup_bulk_dir();
+
+    cargo_bin_cmd!("dr")
+        .args([base.path().to_str().unwrap(), "--bulk", "--json"])
+        .assert()
+        .success();
+
+    // JSON reports should exist in both album directories
+    assert!(base.path().join("Album A/dr_report.json").exists());
+    assert!(base.path().join("Album B/dr_report.json").exists());
+    // Text reports should NOT exist
+    assert!(!base.path().join("Album A/dr_report.txt").exists());
+    assert!(!base.path().join("Album B/dr_report.txt").exists());
+
+    // Verify JSON is valid
+    let json_a = std::fs::read_to_string(base.path().join("Album A/dr_report.json")).unwrap();
+    let parsed: AlbumResult = serde_json::from_str(&json_a).unwrap();
+    assert_eq!(parsed.tracks.len(), 1);
+}
+
+#[test]
+fn test_bulk_txt_only() {
+    let base = setup_bulk_dir();
+
+    cargo_bin_cmd!("dr")
+        .args([base.path().to_str().unwrap(), "--bulk", "--txt"])
+        .assert()
+        .success();
+
+    // Text reports should exist
+    assert!(base.path().join("Album A/dr_report.txt").exists());
+    assert!(base.path().join("Album B/dr_report.txt").exists());
+    // JSON reports should NOT exist
+    assert!(!base.path().join("Album A/dr_report.json").exists());
+    assert!(!base.path().join("Album B/dr_report.json").exists());
+
+    // Verify text content has expected table structure
+    let txt = std::fs::read_to_string(base.path().join("Album A/dr_report.txt")).unwrap();
+    assert!(txt.contains("DR"));
+    assert!(txt.contains("Official DR value"));
+}
+
+#[test]
+fn test_bulk_json_and_txt() {
+    let base = setup_bulk_dir();
+
+    cargo_bin_cmd!("dr")
+        .args([base.path().to_str().unwrap(), "--bulk", "--json", "--txt"])
+        .assert()
+        .success();
+
+    // Both report types should exist in both albums
+    for album in &["Album A", "Album B"] {
+        assert!(base.path().join(album).join("dr_report.json").exists());
+        assert!(base.path().join(album).join("dr_report.txt").exists());
+    }
+}
+
+#[test]
+fn test_bulk_skips_existing_reports() {
+    let base = setup_bulk_dir();
+
+    // First run — generates reports
+    cargo_bin_cmd!("dr")
+        .args([base.path().to_str().unwrap(), "--bulk", "--json"])
+        .assert()
+        .success();
+
+    // Record modification time of Album A's report
+    let report_path = base.path().join("Album A/dr_report.json");
+    let mtime_before = std::fs::metadata(&report_path).unwrap().modified().unwrap();
+
+    // Brief sleep to ensure mtime would differ if file were rewritten
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    // Second run — should skip
+    cargo_bin_cmd!("dr")
+        .args([base.path().to_str().unwrap(), "--bulk", "--json"])
+        .assert()
+        .success()
+        .stderr(predicates::str::contains("Skipping"));
+
+    let mtime_after = std::fs::metadata(&report_path).unwrap().modified().unwrap();
+    assert_eq!(mtime_before, mtime_after, "Report should not have been rewritten");
+}
+
+#[test]
+fn test_bulk_regenerate_overwrites() {
+    let base = setup_bulk_dir();
+
+    // First run
+    cargo_bin_cmd!("dr")
+        .args([base.path().to_str().unwrap(), "--bulk", "--json"])
+        .assert()
+        .success();
+
+    let report_path = base.path().join("Album A/dr_report.json");
+    let mtime_before = std::fs::metadata(&report_path).unwrap().modified().unwrap();
+
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    // Second run with --regenerate — should re-analyze
+    cargo_bin_cmd!("dr")
+        .args([base.path().to_str().unwrap(), "--bulk", "--json", "--regenerate"])
+        .assert()
+        .success()
+        .stderr(predicates::str::contains("Analyzing"));
+
+    let mtime_after = std::fs::metadata(&report_path).unwrap().modified().unwrap();
+    assert_ne!(mtime_before, mtime_after, "Report should have been rewritten");
+}
+
+#[test]
+fn test_bulk_no_subdirectories() {
+    let base = tempfile::tempdir().unwrap();
+    // Empty dir — no subdirectories
+    std::fs::write(base.path().join("file.txt"), "not a dir").unwrap();
+
+    cargo_bin_cmd!("dr")
+        .args([base.path().to_str().unwrap(), "--bulk", "--json"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("No subdirectories found"));
+}
+
+#[test]
+fn test_bulk_summary_line() {
+    let base = setup_bulk_dir();
+
+    cargo_bin_cmd!("dr")
+        .args([base.path().to_str().unwrap(), "--bulk", "--json"])
+        .assert()
+        .success()
+        .stderr(predicates::str::contains("Done: 2 analyzed, 0 skipped, 0 failed (out of 2 total)"));
+}
+
+// --- Single-directory --txt test ---
+
+#[test]
+fn test_single_dir_txt_flag() {
+    let dir = tempfile::tempdir().unwrap();
+    generate_sine_wav(dir.path(), "track.wav", 440.0, 0.99, 12.0, 44100);
+
+    cargo_bin_cmd!("dr")
+        .args([dir.path().to_str().unwrap(), "--txt"])
+        .assert()
+        .success();
+
+    // Both JSON (auto-saved) and TXT should exist
+    assert!(dir.path().join("dr_report.json").exists());
+    assert!(dir.path().join("dr_report.txt").exists());
+
+    let txt = std::fs::read_to_string(dir.path().join("dr_report.txt")).unwrap();
+    assert!(txt.contains("Official DR value"));
 }

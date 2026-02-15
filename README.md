@@ -1,8 +1,8 @@
 # dr
 
 [![CI](https://github.com/alleato-llc/dr/actions/workflows/ci.yml/badge.svg)](https://github.com/alleato-llc/dr/actions/workflows/ci.yml)
-[![GitHub Release](https://img.shields.io/github/v/release/alleato-llcdr)](https://github.com/alleato-llc/dr/releases)
-[![License](https://img.shields.io/github/license/alleato-llc/dr)](LICENSE)
+[![GitHub Release](https://img.shields.io/github/v/release/alleato-llc/dr)](https://github.com/alleato-llc/dr/releases)
+[![License](https://img.shields.io/github/license/nycjv321/dr)](LICENSE)
 [![Built with Claude](https://img.shields.io/badge/Built%20with-Claude-blueviolet)](https://claude.ai)
 
 A dynamic range meter for audio files, implementing the Pleasurize Music Foundation / TT DR standard.

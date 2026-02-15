@@ -148,6 +148,71 @@ dr ~/Music/Artist/Album/ --tui
 
 Launches a terminal interface with live analysis progress, scrollable track table, and export dialog.
 
+## Library Usage
+
+`dr` can also be used as a Rust library for programmatic dynamic range analysis.
+
+### Add dependency
+
+```toml
+[dependencies]
+dr = { git = "https://github.com/alleato-llc/dr.git" }
+```
+
+### Analyze a single file
+
+```rust
+use std::path::Path;
+use dr::analyzer;
+use dr::format;
+
+fn main() -> anyhow::Result<()> {
+    let result = analyzer::analyze_file(Path::new("track.flac"))?;
+    println!("{}", format::format_table_single(&result));
+    Ok(())
+}
+```
+
+### Analyze a directory (album)
+
+```rust
+use std::path::Path;
+use dr::{analyzer, cache, format};
+
+fn main() -> anyhow::Result<()> {
+    let path = Path::new("./album");
+
+    // Check for a cached report first
+    if let Some(cached) = cache::load_cached_report(path) {
+        println!("{}", format::format_table(&cached));
+        return Ok(());
+    }
+
+    // Analyze with parallel jobs (defaults to number of CPU cores)
+    let album = analyzer::analyze_directory(path, analyzer::default_jobs())?;
+
+    // Save the report for future runs
+    cache::save_report(path, &album)?;
+
+    // Output as table, JSON, or CSV
+    println!("{}", format::format_table(&album));
+    // println!("{}", format::format_json(&album));
+    // println!("{}", format::format_csv(&album));
+
+    Ok(())
+}
+```
+
+### Key types
+
+| Type / Module | Description |
+|---------------|-------------|
+| `models::TrackResult` | Per-track DR, peak dB, RMS dB, duration, title, filename |
+| `models::AlbumResult` | Vec of `TrackResult`s, overall DR, optional album name |
+| `analyzer` | `analyze_file`, `analyze_directory`, `scan_audio_files`, `analyze_stdin` |
+| `format` | `format_table`, `format_json`, `format_csv`, and single-track variants |
+| `cache` | `load_cached_report`, `save_report`, `save_text_report` |
+
 ## Options
 
 | Flag | Description |

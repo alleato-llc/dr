@@ -12,7 +12,7 @@ A dynamic range meter for audio files, implementing the Pleasurize Music Foundat
 #### In Progress
 ```
 ┌ DR Meter ───────────────────────────────────────────────────────────────────────────────────────────────────┐
-│Album: Unknown Album  Path: /Users/nycjv321/Desktop/McCartney (Hi-res Unlimited Version)                     │
+│Album: Unknown Album  Path: ./McCartney (Hi-res Unlimited Versio/)                                            │
 └─────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌ [1-13/20] ↓ ────────────────────────────────────────────────────────────────────────────────────────────────┐
 │#    Track                                               DR                 Peak       RMS        Duration   │
@@ -39,7 +39,7 @@ A dynamic range meter for audio files, implementing the Pleasurize Music Foundat
 #### Calculated Dynamic Range
 ```
 ┌ DR Meter ───────────────────────────────────────────────────────────────────────────────────────────────────┐
-│Album: McCartney (Hi-res Unlimited Version)  Path: .//McCartney (Hi-res Unlimited Versio│
+│Album: McCartney (Hi-res Unlimited Version)  Path: ./McCartney (Hi-res Unlimited Versio                      │
 └─────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌ [1-13/20] ↓ ────────────────────────────────────────────────────────────────────────────────────────────────┐
 │#    Track                                               DR                 Peak       RMS        Duration   │

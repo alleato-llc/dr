@@ -120,6 +120,26 @@ dr ~/Music/Artist/Album/
 cat track.flac | dr - --format flac
 ```
 
+### Bulk Mode
+
+Analyze an entire music library at once. Each immediate subdirectory is treated as a separate album:
+
+```bash
+dr ~/Music/ --bulk --json --txt
+```
+
+This writes `dr_report.json` and/or `dr_report.txt` into each album subdirectory. On subsequent runs, albums with existing reports are automatically skipped:
+
+```
+[1/47] Analyzing: Abbey Road
+[2/47] Analyzing: Dark Side of the Moon
+[3/47] Skipping (reports exist): Kind of Blue
+...
+Done: 45 analyzed, 1 skipped, 1 failed (out of 47 total)
+```
+
+Use `--regenerate` to force re-analysis of all albums.
+
 ### Interactive TUI
 
 ```bash
@@ -133,7 +153,10 @@ Launches a terminal interface with live analysis progress, scrollable track tabl
 | Flag | Description |
 |------|-------------|
 | `--json` | Output as JSON instead of table |
+| `--txt` | Write a text report (`dr_report.txt`) alongside JSON |
 | `--tui` | Launch interactive TUI |
+| `--bulk` | Analyze all immediate subdirectories as separate albums |
+| `--regenerate` | Re-analyze even if cached reports exist |
 | `--format <fmt>` | Format hint for STDIN (e.g. flac, mp3, opus) |
 | `-j, --jobs <n>` | Number of parallel analysis jobs (default: CPU cores) |
 

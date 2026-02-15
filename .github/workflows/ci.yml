@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main, 'feature/*']
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Run tests
+        run: cargo test --verbose
+
+  build:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest
+            os: darwin
+            arch: arm64
+            binary: dr
+          - runner: ubuntu-latest
+            os: linux
+            arch: amd64
+            binary: dr
+          - runner: windows-latest
+            os: windows
+            arch: amd64
+            binary: dr.exe
+
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Rename binary
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp target/release/${{ matrix.binary }} dist/dr-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.os == 'windows' && '.exe' || '' }}
+
+      - name: Determine retention days
+        id: retention
+        shell: bash
+        run: |
+          if [[ "${{ github.ref }}" == refs/heads/feature/* ]]; then
+            echo "days=1" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            echo "days=7" >> "$GITHUB_OUTPUT"
+          else
+            echo "days=90" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dr-${{ matrix.os }}-${{ matrix.arch }}
+          path: dist/dr-${{ matrix.os }}-${{ matrix.arch }}*
+          retention-days: ${{ steps.retention.outputs.days }}

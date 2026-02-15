@@ -1,0 +1,18 @@
+[package]
+name = "dr"
+version = "0.1.0"
+edition = "2021"
+description = "Dynamic range meter for audio files"
+license = "MIT"
+
+[dependencies]
+symphonia = { version = "0.5", features = ["all-codecs", "all-formats"] }
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+ratatui = "0.29"
+crossterm = "0.28"
+
+[dev-dependencies]
+tempfile = "3"

@@ -7,6 +7,62 @@
 
 A dynamic range meter for audio files, implementing the Pleasurize Music Foundation / TT DR standard.
 
+### Preview
+
+#### In Progress
+```
+┌ DR Meter ───────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Album: Unknown Album  Path: /Users/nycjv321/Desktop/McCartney (Hi-res Unlimited Version)                     │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ [1-13/20] ↓ ────────────────────────────────────────────────────────────────────────────────────────────────┐
+│#    Track                                               DR                 Peak       RMS        Duration   │
+│1    01-Suicide [Out-take].flac                          ███░░░░░░░░░  29%                                 ⟳ │
+│2    The Lovely Linda                                    DR11               -3.11dB    -14.40dB   0:46     ✓ │
+│3    02-Maybe I'm Amazed [From One Hand Clapping].flac   ██░░░░░░░░░░  17%                                 ⟳ │
+│4    02-That Would Be Something.flac                     ███░░░░░░░░░  31%                                 ⟳ │
+│5    03-Every Night (Live At Glasgow, 1979).flac         ██░░░░░░░░░░  19%                                 ⟳ │
+│6    03-Valentine Day.flac                               ██████░░░░░░  53%                                 ⟳ │
+│7    04-Every Night.flac                                 ████░░░░░░░░  37%                                 ⟳ │
+│8    04-Hot As Sun (Live At Glasgow, 1979).flac          ████░░░░░░░░  33%                                 ⟳ │
+│9    05-Hot As Sun _ Glasses.flac                        █████░░░░░░░  46%                                 ⟳ │
+│10   05-Maybe I'm Amazed (Live At Glasgow, 1979).flac    ██░░░░░░░░░░  17%                                 ⟳ │
+│11   06-Don't Cry Baby [Out-take].flac                   ███░░░░░░░░░  28%                                 ⟳ │
+│12   06-Junk.flac                                        █████░░░░░░░  45%                                 ⟳ │
+│13   07-Man We Was Lonely.flac                           ███░░░░░░░░░  31%                                 ⟳ │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                      Overall DR: ~DR11 (1/20 complete)                                      │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+                                           [e]xport  [a]bout  [q]uit
+```
+
+#### Calculated Dynamic Range
+```
+┌ DR Meter ───────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Album: McCartney (Hi-res Unlimited Version)  Path: .//McCartney (Hi-res Unlimited Versio│
+└─────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ [1-13/20] ↓ ────────────────────────────────────────────────────────────────────────────────────────────────┐
+│#    Track                                               DR                 Peak       RMS        Duration   │
+│1    Suicide [Out-take]                                  DR13               -3.70dB    -16.94dB   2:50     ✓ │
+│2    The Lovely Linda                                    DR11               -3.11dB    -14.40dB   0:46     ✓ │
+│3    Maybe I'm Amazed [From One Hand Clapping]           DR11               -2.10dB    -12.12dB   4:54     ✓ │
+│4    That Would Be Something                             DR11               -0.67dB    -12.86dB   2:41     ✓ │
+│5    Every Night (Live At Glasgow, 1979)                 DR13               -0.10dB    -12.75dB   4:32     ✓ │
+│6    Valentine Day                                       DR11               -2.58dB    -14.18dB   1:44     ✓ │
+│7    Every Night                                         DR11               -0.11dB    -12.38dB   2:35     ✓ │
+│8    Hot As Sun (Live At Glasgow, 1979)                  DR12               -0.16dB    -12.50dB   2:28     ✓ │
+│9    Hot As Sun / Glasses                                DR11               -1.81dB    -14.82dB   2:09     ✓ │
+│10   Maybe I'm Amazed (Live At Glasgow, 1979)            DR11               -1.04dB    -12.77dB   5:13     ✓ │
+│11   Don't Cry Baby [Out-take]                           DR12               -2.30dB    -12.55dB   3:08     ✓ │
+│12   Junk                                                DR15               -0.61dB    -14.80dB   1:57     ✓ │
+│13   Man We Was Lonely                                   DR10               -2.31dB    -12.69dB   3:00     ✓ │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                      Overall DR: DR12 (20/20 complete)                                      │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+                                           [e]xport  [a]bout  [q]uit
+```
+
 ## Features
 
 - Measure dynamic range (DR) of individual audio files or entire albums
@@ -49,13 +105,7 @@ cargo build --release
 dr track.flac
 ```
 
-```
-DR              Peak        RMS   Duration  Track
-──────────────────────────────────────────────────────────
-DR14        -0.10 dB  -16.78 dB      4:23  Track Title
-──────────────────────────────────────────────────────────
-Official DR value: DR14
-```
+
 
 ### Directory (Album)
 
@@ -63,16 +113,6 @@ Official DR value: DR14
 dr ~/Music/Artist/Album/
 ```
 
-```
-DR              Peak        RMS   Duration  Track
-──────────────────────────────────────────────────────────
-DR14        -0.10 dB  -16.78 dB      4:23  Track One
-DR12        -0.30 dB  -14.56 dB      3:45  Track Two
-DR15        -0.05 dB  -18.20 dB      5:01  Track Three
-──────────────────────────────────────────────────────────
-Number of tracks:  3
-Official DR value: DR14
-```
 
 ### STDIN
 

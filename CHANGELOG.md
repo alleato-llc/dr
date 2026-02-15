@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.3](https://github.com/alleato-llc/dr/compare/dr-v0.1.2...dr-v0.1.3) (2026-02-15)
+
+
+### Bug Fixes
+
+* badge urls ([fa5e516](https://github.com/alleato-llc/dr/commit/fa5e5169e7af41bde1ea6265c4ca83b01cc99335))
+* badge urls ([38b0369](https://github.com/alleato-llc/dr/commit/38b0369d51f8c45491929466f2df829b3cf535e2))
+
 ## [0.1.2](https://github.com/alleato-llc/dr/compare/dr-v0.1.1...dr-v0.1.2) (2026-02-15)
 
 

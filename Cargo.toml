@@ -1,6 +1,6 @@
 [package]
 name = "dr"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 description = "Dynamic range meter for audio files"
 license = "MIT"
